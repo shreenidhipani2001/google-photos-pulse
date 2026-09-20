@@ -1,0 +1,62 @@
+{
+  "raw_total": 117037,
+  "removed_count": 20111,
+  "removed_pct": 17.2,
+  "clean_total": 96926,
+  "clean_rated": 78255,
+  "clean_avg_rating": 3.31,
+  "positive": {
+    "count": 41577,
+    "pct": 42.9
+  },
+  "negative": {
+    "count": 28714,
+    "pct": 29.6
+  },
+  "neutral": {
+    "count": 7964,
+    "pct": 8.2
+  },
+  "unknown": {
+    "count": 18671,
+    "pct": 19.3
+  },
+  "net_sentiment": 13.3,
+  "stars": {
+    "5": {
+      "count": 32584,
+      "pct": 41.6
+    },
+    "4": {
+      "count": 8993,
+      "pct": 11.5
+    },
+    "3": {
+      "count": 7964,
+      "pct": 10.2
+    },
+    "2": {
+      "count": 7150,
+      "pct": 9.1
+    },
+    "1": {
+      "count": 21564,
+      "pct": 27.6
+    }
+  },
+  "platforms": {
+    "Google Play Store (Main App)": 51691,
+    "Google Play Store": 15954,
+    "YouTube": 12023,
+    "Apple App Store": 10553,
+    "Hacker News": 4522,
+    "GitHub Community": 499,
+    "Reddit": 458,
+    "Stack Exchange (Webapps)": 321,
+    "Stack Exchange (Android)": 310,
+    "Stack Exchange (Superuser)": 282,
+    "Stack Exchange (Photography)": 247,
+    "Google Support Community": 57,
+    "Wikipedia (Open Knowledge)": 9
+  }
+}

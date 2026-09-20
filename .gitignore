@@ -1,0 +1,21 @@
+# Python Virtual Environment & Caches
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Streamlit Local Cache
+.streamlit/secrets.toml
+
+# Backups and Scratch
+*_backup_raw.*
+scratch/
+*.log
+
+# OS Generated
+.DS_Store
+Thumbs.db
+desktop.ini
