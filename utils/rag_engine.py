@@ -296,12 +296,16 @@ class PhotosRAGEngine:
                     "forgotten": hist_row.get("forgotten_clues")
                 })
 
+        point_takeaways = [f"<b>{title}:</b> {desc}" for title, desc in points]
         return {
             "is_conceptual": True,
             "show_photos": False,
+            "paragraph_summary": paragraph,
             "paragraph_response": paragraph,
+            "point_takeaways": point_takeaways,
             "point_wise_response": points,
             "reasoning": "Identified Product Management Discovery inquiry regarding Google Photos search failure taxonomy and clue comprehension.",
+            "photos": [],
             "matches": [],
             "clarifying_question": None,
             "confidence_band": "HIGH",
@@ -319,15 +323,20 @@ class PhotosRAGEngine:
             return self.generate_conceptual_response(user_query)
 
         if self.df_catalog.empty or not self.vectorizer.doc_vectors:
+            empty_msg = "The photo catalog is currently empty or unindexed. Please re-index datasets in the sidebar."
             return {
                 "is_conceptual": False,
                 "show_photos": False,
-                "paragraph_response": "The photo catalog is currently empty or unindexed. Please re-index datasets in the sidebar.",
+                "paragraph_summary": empty_msg,
+                "paragraph_response": empty_msg,
+                "point_takeaways": [],
                 "point_wise_response": [],
                 "reasoning": "Catalog is empty or unindexed.",
+                "photos": [],
                 "matches": [],
                 "clarifying_question": None,
                 "confidence_band": "LOW",
+                "top_confidence": 0,
                 "historical_feedback_context": []
             }
 
@@ -342,37 +351,54 @@ class PhotosRAGEngine:
             for doc_vec in self.vectorizer.doc_vectors
         ]
 
-        # Multi-factor score calibration (temporal booster + location + OCR bonus)
+        # Multi-factor score calibration (temporal booster + location + OCR bonus + semantic match)
         adjusted_scores = []
+        max_base = max(sim_scores) if sim_scores else 1.0
+        all_query_terms = [t for t in re.findall(r'\b[a-zA-Z0-9]+\b', expanded_query.lower()) if len(t) > 2 and t not in ENGLISH_STOPWORDS]
+
         for idx, base_score in enumerate(sim_scores):
             row = self.df_catalog.iloc[idx]
             
-            # Base semantic relevance
-            relevance = base_score * 1.8
+            # Relative semantic strength compared to best TF-IDF match in catalog
+            rel_strength = (base_score / max_base) if max_base > 0 else 0.0
             
+            # Base semantic relevance
+            relevance = base_score * 2.2
+            if rel_strength >= 0.85:
+                relevance += 0.30 * rel_strength
+
             # Boost if target year matches
             photo_timestamp = str(row.get("timestamp", ""))
             if any(str(y) in photo_timestamp for y in expansion["target_years"]):
                 relevance += 0.20
 
             # Boost if location matches
-            loc_str = str(row.get("location_tag", "")).lower()
+            loc_str = f"{row.get('location_tag', '')} {row.get('location', '')}".lower()
             if any(loc in loc_str for loc in expansion["location_cues"]):
                 relevance += 0.25
 
             # Boost for direct OCR match
-            ocr_str = str(row.get("ocr_text", "")).lower()
-            if any(obj in ocr_str for obj in expansion["object_cues"]):
-                relevance += 0.20
+            ocr_str = f"{row.get('ocr_text', '')} {row.get('detected_ocr', '')}".lower()
+            matched_ocr_count = sum(1 for t in all_query_terms if t in ocr_str)
+            if matched_ocr_count > 0:
+                relevance += min(0.30, 0.15 + 0.05 * matched_ocr_count)
 
             # Boost for visual description match
-            vis_str = str(row.get("ai_visual_description", "")).lower()
-            if any(v in vis_str for v in expansion["visual_cues"]):
-                relevance += 0.15
+            vis_str = f"{row.get('ai_visual_description', '')} {row.get('visual_description', '')} {row.get('detected_objects', '')}".lower()
+            matched_vis_count = sum(1 for t in all_query_terms if t in vis_str)
+            if matched_vis_count > 0:
+                relevance += min(0.25, 0.10 + 0.05 * matched_vis_count)
 
-            # Scale to realistic 0-100% probability curve
-            calibrated = min(0.98, max(0.15, relevance)) if base_score > 0.05 else min(0.35, base_score * 0.8)
+            # High confidence calibration for top matches with confirmed multimodal alignment
+            if (matched_ocr_count >= 1 or matched_vis_count >= 2) and rel_strength >= 0.70:
+                calibrated = min(0.98, max(0.90, relevance))
+            elif base_score > 0.05:
+                calibrated = min(0.92, max(0.25, relevance))
+            else:
+                calibrated = min(0.35, base_score * 0.8)
+
             adjusted_scores.append((idx, calibrated))
+
 
         # Sort descending
         adjusted_scores.sort(key=lambda x: x[1], reverse=True)
@@ -390,15 +416,28 @@ class PhotosRAGEngine:
                 if term in desc_text:
                     matched_items.append(term)
 
+            loc = str(row.get("location_tag") or row.get("location") or "Unknown Location")
+            cat = str(row.get("album_name") or row.get("category") or "General")
+            desc = str(row.get("ai_visual_description") or row.get("visual_description") or "No description available")
+            ocr = str(row.get("ocr_text") if "ocr_text" in row else row.get("detected_ocr", "None"))
+            if not ocr or str(ocr).strip() == "" or str(ocr).lower() == "nan":
+                ocr = "None"
+
             matches.append({
                 "photo_id": row.get("photo_id", f"IMG_{idx}"),
-                "timestamp": row.get("timestamp", "Unknown"),
-                "location_tag": row.get("location_tag", "Unknown Location"),
-                "ai_visual_description": row.get("ai_visual_description", "No description available"),
-                "detected_objects": row.get("detected_objects", ""),
-                "ocr_text": row.get("ocr_text", "None"),
-                "album_name": row.get("album_name", "General"),
+                "timestamp": str(row.get("timestamp", "Unknown")),
+                "location_tag": loc,
+                "location": loc,
+                "ai_visual_description": desc,
+                "visual_description": desc,
+                "detected_objects": str(row.get("detected_objects", "")),
+                "ocr_text": ocr,
+                "detected_ocr": ocr,
+                "album_name": cat,
+                "category": cat,
                 "confidence_score": pct_conf,
+                "confidence": round(score, 2),
+                "image_url": str(row.get("image_url", "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600&auto=format&fit=crop&q=80")),
                 "matched_cues": list(set(matched_items)) if matched_items else ["semantic concept"]
             })
 
@@ -484,15 +523,29 @@ class PhotosRAGEngine:
                         "forgotten": hist_row.get("forgotten_clues")
                     })
 
+        # Synthesize point takeaways for quick scanning
+        point_takeaways = [f"<b>{title}:</b> {desc}" if isinstance(title, str) else str(desc) for title, desc in points]
+
         return {
             "is_conceptual": False,
             "show_photos": True,
+            "paragraph_summary": paragraph_response,
             "paragraph_response": paragraph_response,
+            "point_takeaways": point_takeaways,
             "point_wise_response": points,
             "reasoning": reasoning_summary,
+            "photos": matches,
             "matches": matches,
             "clarifying_question": clarifying_question,
             "confidence_band": confidence_band,
             "top_confidence": top_confidence,
             "historical_feedback_context": hist_context
         }
+
+    def answer_query(self, user_query: str, top_k: int = 4) -> Dict[str, Any]:
+        """
+        Public conversational interface for Ask Photos & Evaluator Mode.
+        Synthesizes query intent, expands episodic cues, and returns structured multimodal memory matches.
+        """
+        return self.search(user_query=user_query, top_k=top_k)
+

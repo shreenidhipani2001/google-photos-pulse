@@ -4,6 +4,7 @@ import numpy as np
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 FEEDBACK_CSV_PATH = os.path.join(DATA_DIR, "user_feedback_dataset.csv")
+CATALOG_CSV_PATH = os.path.join(DATA_DIR, "photo_metadata_catalog.csv")
 CATALOG_XLSX_PATH = os.path.join(DATA_DIR, "photo_metadata_catalog.xlsx")
 
 def ensure_data_directory():
@@ -651,31 +652,115 @@ def load_user_feedback(csv_path: str = None) -> pd.DataFrame:
         pass
     return df
 
-def load_photo_catalog(xlsx_path: str = None) -> pd.DataFrame:
+def normalize_catalog_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Load photo metadata catalog from Excel.
-    Falls back gracefully to in-memory realistic generation if file is unreadable or missing.
+    Ensure 100% schema alignment across components by creating aliases for:
+    - album_name <-> category
+    - location_tag <-> location
+    - ocr_text <-> detected_ocr
+    - ai_visual_description <-> visual_description
     """
-    path = xlsx_path or CATALOG_XLSX_PATH
-    if os.path.exists(path):
+    if df.empty:
+        return df
+
+    # Album / Category
+    if "album_name" not in df.columns and "category" not in df.columns:
+        df["album_name"] = "General"
+        df["category"] = "General"
+    elif "album_name" not in df.columns:
+        df["album_name"] = df["category"]
+    elif "category" not in df.columns:
+        df["category"] = df["album_name"]
+    else:
+        df["category"] = df["category"].fillna(df["album_name"]).fillna("General")
+        df["album_name"] = df["album_name"].fillna(df["category"]).fillna("General")
+
+    # Location
+    if "location_tag" not in df.columns and "location" not in df.columns:
+        df["location_tag"] = "Unknown Location"
+        df["location"] = "Unknown Location"
+    elif "location_tag" not in df.columns:
+        df["location_tag"] = df["location"]
+    elif "location" not in df.columns:
+        df["location"] = df["location_tag"]
+    else:
+        df["location"] = df["location"].fillna(df["location_tag"]).fillna("Unknown Location")
+        df["location_tag"] = df["location_tag"].fillna(df["location"]).fillna("Unknown Location")
+
+    # OCR text
+    if "ocr_text" not in df.columns and "detected_ocr" not in df.columns:
+        df["ocr_text"] = "None"
+        df["detected_ocr"] = "None"
+    elif "ocr_text" not in df.columns:
+        df["ocr_text"] = df["detected_ocr"]
+    elif "detected_ocr" not in df.columns:
+        df["detected_ocr"] = df["ocr_text"]
+    else:
+        df["detected_ocr"] = df["detected_ocr"].fillna(df["ocr_text"]).fillna("None")
+        df["ocr_text"] = df["ocr_text"].fillna(df["detected_ocr"]).fillna("None")
+
+    # Visual description
+    if "ai_visual_description" not in df.columns and "visual_description" not in df.columns:
+        df["ai_visual_description"] = ""
+        df["visual_description"] = ""
+    elif "ai_visual_description" not in df.columns:
+        df["ai_visual_description"] = df["visual_description"]
+    elif "visual_description" not in df.columns:
+        df["visual_description"] = df["ai_visual_description"]
+    else:
+        df["visual_description"] = df["visual_description"].fillna(df["ai_visual_description"]).fillna("")
+        df["ai_visual_description"] = df["ai_visual_description"].fillna(df["visual_description"]).fillna("")
+
+    if "detected_objects" not in df.columns:
+        df["detected_objects"] = ""
+    else:
+        df["detected_objects"] = df["detected_objects"].fillna("")
+
+    # Clean missing strings
+    for c in ["ocr_text", "detected_ocr"]:
+        if c in df.columns:
+            df[c] = df[c].fillna("None").astype(str)
+
+    return df
+
+
+def load_photo_catalog(catalog_path: str = None) -> pd.DataFrame:
+    """
+    Load photo metadata catalog prioritizing fast CSV, with fallback to Excel.
+    Falls back gracefully to in-memory generation if file is unreadable or missing.
+    Always returns a normalized dataframe with both category/album_name, location/location_tag, etc.
+    """
+    # 1. Try explicit path or CSV path first (orders of magnitude faster than XLSX)
+    csv_file = CATALOG_CSV_PATH
+    xlsx_file = catalog_path or CATALOG_XLSX_PATH
+
+    if os.path.exists(csv_file):
         try:
-            df = pd.read_excel(path)
-            expected_cols = {"photo_id", "timestamp", "location_tag", "detected_objects", "ocr_text", "ai_visual_description", "album_name"}
-            if expected_cols.issubset(set(df.columns)):
-                return df
-            else:
-                print(f"[DataLoader] Warning: {path} missing expected columns. Regenerating.")
+            df = pd.read_csv(csv_file)
+            if not df.empty:
+                return normalize_catalog_dataframe(df)
         except Exception as e:
-            print(f"[DataLoader] Error reading {path}: {e}")
-            
-    # Fallback to generated dataset and persist
+            print(f"[DataLoader] Notice: Error reading CSV {csv_file}: {e}")
+
+    # 2. Try Excel path
+    if os.path.exists(xlsx_file):
+        try:
+            df = pd.read_excel(xlsx_file)
+            if not df.empty:
+                return normalize_catalog_dataframe(df)
+        except Exception as e:
+            print(f"[DataLoader] Error reading Excel {xlsx_file}: {e}")
+
+    # 3. Fallback to generated dataset and persist
     df = generate_sample_photo_catalog()
     ensure_data_directory()
     try:
+        df.to_csv(CATALOG_CSV_PATH, index=False)
         df.to_excel(CATALOG_XLSX_PATH, index=False)
     except Exception:
         pass
-    return df
+    return normalize_catalog_dataframe(df)
+
 
 def load_all_data():
     """Convenience helper to load both feedback and photo catalog datasets."""
